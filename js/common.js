@@ -163,6 +163,30 @@
 		return serialOp
 	}
 
+	//多标签页支持：serialOptions/toolOptions 按标签页隔离，存 sessionStorage（同一标签页刷新保留，标签页之间互不影响）
+	//同时把最近一次的值写入 localStorage 作为新标签页打开时的默认种子
+	//quickSendList/code 仍存 localStorage，作为全局共享的指令库与脚本
+	const PER_TAB_KEYS = new Set(['serialOptions', 'toolOptions'])
+	function loadParam(key) {
+		if (PER_TAB_KEYS.has(key)) {
+			return sessionStorage.getItem(key) ?? localStorage.getItem(key)
+		}
+		return localStorage.getItem(key)
+	}
+	function saveParam(key, value) {
+		if (value == null) {
+			if (PER_TAB_KEYS.has(key)) {
+				sessionStorage.removeItem(key)
+			}
+			localStorage.removeItem(key)
+			return
+		}
+		if (PER_TAB_KEYS.has(key)) {
+			sessionStorage.setItem(key, value)
+		}
+		localStorage.setItem(key, value)
+	}
+
 	function safeJsonParse(text) {
 		if (typeof text !== 'string' || !text) {
 			return null
@@ -558,17 +582,17 @@
 		if (!confirm('是否重置参数?')) {
 			return
 		}
-		localStorage.removeItem('serialOptions')
-		localStorage.removeItem('toolOptions')
-		localStorage.removeItem('quickSendList')
-		localStorage.removeItem('code')
+		saveParam('serialOptions', null)
+		saveParam('toolOptions', null)
+		saveParam('quickSendList', null)
+		saveParam('code', null)
 		location.reload()
 	})
 	//导出参数
 	document.getElementById('serial-export').addEventListener('click', (e) => {
 		let data = {
-			serialOptions: localStorage.getItem('serialOptions'),
-			toolOptions: localStorage.getItem('toolOptions'),
+			serialOptions: loadParam('serialOptions'),
+			toolOptions: loadParam('toolOptions'),
 			quickSendList: localStorage.getItem('quickSendList'),
 			code: localStorage.getItem('code'),
 		}
@@ -580,11 +604,7 @@
 		document.getElementById('serial-import-file').click()
 	})
 	function setParam(key, value) {
-		if (value == null) {
-			localStorage.removeItem(key)
-		} else {
-			localStorage.setItem(key, value)
-		}
+		saveParam(key, value)
 	}
 	document.getElementById('serial-import-file').addEventListener('change', (e) => {
 		let file = e.target.files[0]
@@ -690,7 +710,7 @@
 		}
 	})
 	//读取参数
-	let options = localStorage.getItem('serialOptions')
+	let options = loadParam('serialOptions')
 	if (options) {
 		const normalized = normalizeSerialOptions(safeJsonParse(options))
 		set('serial-baud', normalized.baudRate)
@@ -699,12 +719,12 @@
 		set('serial-parity', normalized.parity)
 		set('serial-buffer-size', normalized.bufferSize)
 		set('serial-flow-control', normalized.flowControl)
-		localStorage.setItem('serialOptions', JSON.stringify(normalized))
+		saveParam('serialOptions', JSON.stringify(normalized))
 	}
-	options = localStorage.getItem('toolOptions')
+	options = loadParam('toolOptions')
 	if (options) {
 		toolOptions = normalizeToolOptions(safeJsonParse(options))
-		localStorage.setItem('toolOptions', JSON.stringify(toolOptions))
+		saveParam('toolOptions', JSON.stringify(toolOptions))
 	}
 	document.getElementById('serial-timer-out').value = toolOptions.timeOut
 	document.getElementById('serial-log-type').value = toolOptions.logType
@@ -908,7 +928,7 @@
 		try {
 			await serialPort.open(SerialOptions)
 			setSerialState(SERIAL_STATES.OPEN)
-			localStorage.setItem('serialOptions', JSON.stringify(SerialOptions))
+			saveParam('serialOptions', JSON.stringify(SerialOptions))
 			readData().catch((e) => addLogErr(e?.message ?? e?.toString?.() ?? String(e)))
 		} catch (e) {
 			setSerialState(SERIAL_STATES.CLOSED)
@@ -945,7 +965,7 @@
 	//修改参数并保存
 	function changeOption(key, value) {
 		toolOptions = normalizeToolOptions({ ...toolOptions, [key]: value })
-		localStorage.setItem('toolOptions', JSON.stringify(toolOptions))
+		saveParam('toolOptions', JSON.stringify(toolOptions))
 	}
 
 	//串口事件监听
@@ -965,6 +985,26 @@
 			runSerialOp(() => closeSerial())
 		}
 	})
+	//根据当前串口生成标签页标题，便于多标签页区分不同设备
+	function getPortLabel(port) {
+		if (!port || typeof port.getInfo !== 'function') {
+			return ''
+		}
+		try {
+			const info = port.getInfo()
+			const vid = info?.usbVendorId
+			const pid = info?.usbProductId
+			if (vid != null && pid != null) {
+				const hex = (n) => n.toString(16).toUpperCase().padStart(4, '0')
+				return `${hex(vid)}:${hex(pid)}`
+			}
+		} catch {}
+		return ''
+	}
+	function updateTabTitle() {
+		const label = getPortLabel(serialPort)
+		document.title = label ? `串口调试 - ${label}` : '串口调试'
+	}
 	function serialStatuChange(statu) {
 		const container = document.getElementById('serial-status')
 		const alert = document.createElement('div')
@@ -972,6 +1012,7 @@
 		alert.role = 'alert'
 		alert.textContent = statu ? '设备已连接' : '设备已断开'
 		container.replaceChildren(alert)
+		updateTabTitle()
 	}
 	//串口数据收发
 	async function send() {
