@@ -166,7 +166,7 @@
 	//多标签页支持：serialOptions/toolOptions 按标签页隔离，存 sessionStorage（同一标签页刷新保留，标签页之间互不影响）
 	//同时把最近一次的值写入 localStorage 作为新标签页打开时的默认种子
 	//quickSendList/code 仍存 localStorage，作为全局共享的指令库与脚本
-	const PER_TAB_KEYS = new Set(['serialOptions', 'toolOptions'])
+	const PER_TAB_KEYS = new Set(['serialOptions', 'toolOptions', 'deviceAlias'])
 	function loadParam(key) {
 		if (PER_TAB_KEYS.has(key)) {
 			return sessionStorage.getItem(key) ?? localStorage.getItem(key)
@@ -1001,9 +1001,17 @@
 		} catch {}
 		return ''
 	}
+	//设备别名（按标签页保存）
+	let deviceAlias = loadParam('deviceAlias') || ''
 	function updateTabTitle() {
-		const label = getPortLabel(serialPort)
+		const label = deviceAlias || getPortLabel(serialPort)
 		document.title = label ? `串口调试 - ${label}` : '串口调试'
+	}
+	function updateLogTitle() {
+		const title = document.getElementById('serial-log-title')
+		if (title) {
+			title.textContent = deviceAlias ? `${deviceAlias} 串口日志` : '串口日志'
+		}
 	}
 	function serialStatuChange(statu) {
 		const container = document.getElementById('serial-status')
@@ -1014,6 +1022,18 @@
 		container.replaceChildren(alert)
 		updateTabTitle()
 	}
+	const serialAliasInput = document.getElementById('serial-alias')
+	if (serialAliasInput) {
+		serialAliasInput.value = deviceAlias
+		serialAliasInput.addEventListener('input', () => {
+			deviceAlias = serialAliasInput.value.trim().slice(0, 32)
+			saveParam('deviceAlias', deviceAlias || null)
+			updateLogTitle()
+			updateTabTitle()
+		})
+	}
+	updateLogTitle()
+	updateTabTitle()
 	//串口数据收发
 	async function send() {
 		let content = document.getElementById('serial-send-content').value
@@ -1292,14 +1312,30 @@
 		showMsg('已复制到剪贴板')
 	}
 
+	//生成导出日志文件名：文件名(别名) + 串口号 + 时间戳
+	//注：Web Serial 拿不到系统串口号(COM3 等)，用设备 VID:PID 作为串口标识
+	function buildLogFilename(ext) {
+		const safeAlias = deviceAlias.replace(/[\\/:*?"<>|]/g, '_').trim()
+		const parts = [safeAlias || 'serial']
+		const port = getPortLabel(serialPort).replace(/:/g, '-')
+		if (port) {
+			parts.push(port)
+		}
+		const d = new Date()
+		const p2 = (n) => String(n).padStart(2, '0')
+		const ts = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}_${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`
+		parts.push(ts)
+		return `${parts.join('_')}.${ext}`
+	}
+
 	//保存文本
 	function saveText(text) {
 		let blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
-		saveAs(blob, 'serial.txt')
+		saveAs(blob, buildLogFilename('txt'))
 	}
 	function saveLogsHtml(html) {
 		let blob = new Blob([html], { type: 'text/html;charset=utf-8' })
-		saveAs(blob, 'serial.html')
+		saveAs(blob, buildLogFilename('html'))
 	}
 	function buildLogsHtmlDocument() {
 		const isAnsi = serialLogs.classList.contains('ansi')
